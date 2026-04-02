@@ -54,7 +54,7 @@ def get_ticker_from_name(search_term):
 @st.cache_data 
 def load_data(ticker):
     try:
-        df = yf.download(ticker, start='2023-01-01', progress=False)
+        df = yf.download(ticker, start='2022-01-01', progress=False)
         if df.empty: return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         return df
@@ -143,6 +143,9 @@ elif st.session_state.page == 'DETAIL':
         with st.spinner('📰 최신 뉴스를 읽고 감성을 분석 중입니다...'):
             news_score, news_data = fetch_and_analyze_news(f"{nm} 주가")
 
+        # ✨ 내일 날짜 계산 복구
+        target_date = (df.index.max() + timedelta(days=1)).strftime('%Y년 %m월 %d일')
+
         st.subheader("📊 실시간 주가 차트")
         fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
         fig.update_layout(xaxis_rangeslider_visible=False, template='plotly_dark')
@@ -157,35 +160,59 @@ elif st.session_state.page == 'DETAIL':
         elif "딥러닝" in ai_choice: model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42)
         else: model = VotingClassifier(estimators=[('xgb', xgb.XGBClassifier(max_depth=3)), ('mlp', MLPClassifier(hidden_layer_sizes=(100, 50))), ('rf', RandomForestClassifier(n_estimators=100))], voting='soft')
 
-        # 정확도 계산 및 전체 학습
+        # 학습 및 테스트 데이터 분리 (최근 20% 기간을 백테스팅에 사용)
         train_size = int(len(X[:-1]) * 0.8)
-        model.fit(X.iloc[:train_size], y.iloc[:train_size])
-        accuracy = accuracy_score(y.iloc[train_size:-1], model.predict(X.iloc[train_size:-1])) * 100
+        X_train, y_train = X.iloc[:train_size], y.iloc[:train_size]
+        X_test, y_test = X.iloc[train_size:-1], y.iloc[train_size:-1]
         
+        # 모델 학습 및 정확도 측정
+        model.fit(X_train, y_train)
+        accuracy = accuracy_score(y_test, model.predict(X_test)) * 100
+        
+        # 백테스팅 계산 로직
+        test_dates = df.index[train_size:-1]
+        ai_predictions = model.predict(X_test)
+        backtest_df = pd.DataFrame(index=test_dates)
+        backtest_df['Daily_Return'] = df['Return'].iloc[train_size:-1].values
+        backtest_df['Buy_Hold'] = (1 + backtest_df['Daily_Return']).cumprod() * 100
+        ai_signals_shifted = np.roll(ai_predictions, shift=1)
+        ai_signals_shifted[0] = 1 
+        backtest_df['AI_Strategy_Return'] = backtest_df['Daily_Return'] * ai_signals_shifted
+        backtest_df['AI_Strategy'] = (1 + backtest_df['AI_Strategy_Return']).cumprod() * 100
+
+        # 최종 예측 산출
         model.fit(X[:-1], y[:-1]) 
         base_probs = model.predict_proba(X.iloc[[-1]])[0]
-        
-        # 2. 하이브리드 점수 결합 
         news_impact = news_score * 15.0 
         final_up_prob = min(max(base_probs[1] * 100 + news_impact, 0), 100)
         final_down_prob = 100 - final_up_prob
 
         # --- 출력 1: 예측 시그널 및 뉴스 ---
         st.markdown("---")
+        
+        # ✨ 내일 주가 예측 직관적 결과 복구
+        st.markdown(f"### 🚀 내일 ({target_date}) 최종 주가 예측")
+        if final_up_prob >= 50:
+            st.success(f"🔥🔥 AI는 {nm} 주가가 내일 **상승(UP)**할 것으로 예측했습니다! (확률: {final_up_prob:.1f}%)")
+        else:
+            st.error(f"❄️❄️ AI는 {nm} 주가가 내일 **하락(DOWN)**할 것으로 예측했습니다! (확률: {final_down_prob:.1f}%)")
+        
+        st.markdown("<br>", unsafe_allow_html=True) # 약간의 여백
+        
         colA, colB = st.columns(2)
         
         with colA:
-            st.markdown(f"### 💡 최종 트레이딩 시그널")
-            st.metric(label="🎯 차트 모델 과거 정확도", value=f"{accuracy:.2f}%")
-            if final_up_prob >= 70: st.success(f"📈 **[적극 매수]** 최종 상승 확률 **{final_up_prob:.1f}%**")
-            elif final_up_prob >= 55: st.info(f"🔼 **[매수 / 분할]** 최종 상승 확률 **{final_up_prob:.1f}%**")
-            elif final_down_prob >= 70: st.error(f"📉 **[적극 매도]** 최종 하락 확률 **{final_down_prob:.1f}%**")
-            elif final_down_prob >= 55: st.warning(f"🔽 **[매도 / 비중 축소]** 최종 하락 확률 **{final_down_prob:.1f}%**")
-            else: st.write(f"⏸️ **[관망 (Hold)]** 상승/하락 팽팽함 ({final_up_prob:.1f}%)")
-            st.caption(f"*(기본 분석 {base_probs[1]*100:.1f}% 에 뉴스 감성 보정치 {news_impact:+.1f}%p 반영)*")
+            st.markdown(f"#### 💡 트레이딩 시그널")
+            st.metric(label="🎯 모델 과거 테스트 정확도", value=f"{accuracy:.2f}%", help="최근 20%의 데이터를 가리고 모델이 맞춘 비율입니다.")
+            if final_up_prob >= 70: st.success(f"📈 **[적극 매수]** 강력한 상승 신호")
+            elif final_up_prob >= 55: st.info(f"🔼 **[매수 / 분할]** 완만한 상승 신호")
+            elif final_down_prob >= 70: st.error(f"📉 **[적극 매도]** 강력한 하락 신호")
+            elif final_down_prob >= 55: st.warning(f"🔽 **[매도 / 비중 축소]** 완만한 하락 신호")
+            else: st.write(f"⏸️ **[관망 (Hold)]** 뚜렷한 추세 없음")
+            st.caption(f"*(차트 확률 {base_probs[1]*100:.1f}% + 뉴스 보정치 {news_impact:+.1f}%p)*")
 
         with colB:
-            st.markdown("### 📰 실시간 뉴스 감성 분석")
+            st.markdown("#### 📰 실시간 뉴스 감성 분석")
             if news_data:
                 sentiment_text = "🔥 호재 우세" if news_score > 0.2 else "❄️ 악재 우세" if news_score < -0.2 else "➖ 사실 위주"
                 st.write(f"**현재 시장 분위기:** {sentiment_text}")
@@ -194,36 +221,25 @@ elif st.session_state.page == 'DETAIL':
             else:
                 st.write("최신 뉴스 데이터를 찾을 수 없습니다.")
 
-        # --- ✨ 부활한 파트: 시각화 및 분석 근거 ✨ ---
+        # --- 출력 2: 백테스팅 시각화 파트 ---
         st.markdown("---")
-        st.markdown("### 🔍 모델 분석 근거 및 시각화")
-        col1, col2 = st.columns(2)
+        st.markdown("### 📈 모델 신뢰도 검증 (Backtesting Simulation)")
+        st.info("💡 **가상 투자 테스트:** 최근 기간 동안 주식을 계속 보유했을 때(회색 선)와, AI의 매수/매도 시그널을 따랐을 때(파란색 선)의 자산 변화 차이입니다. (초기 자산 100 기준)")
         
-        with col1:
-            st.markdown("#### 📝 기본 차트 분석 코멘트")
-            if "XGBoost" in ai_choice:
-                importances = model.feature_importances_
-                feature_names = ['수익률(Return)', '거래량 변화율', '5일 이평선(MA_5)']
-                key_feature = feature_names[np.argmax(importances)]
-                st.info(f"🌳 **트리 모델 분석:** 현재 예측에서 가장 중요한 단서는 **'{key_feature}'** 입니다. 과거의 변동성 패턴을 쪼개어 방향성을 도출했습니다.")
-            elif "딥러닝" in ai_choice:
-                st.info("🧠 **딥러닝 분석:** 인공신경망이 과거 주가 흐름의 복합적인 비선형 패턴을 계산하여 결론을 냈습니다.")
-            else: 
-                st.info("🤝 **앙상블 분석:** XGBoost, 랜덤포레스트, 인공신경망 3개 모델의 다수결 투표를 통해 편향 없는 결론을 산출했습니다.")
-
-        with col2:
-            st.markdown("#### 📊 데이터 시각화")
-            if "XGBoost" in ai_choice:
-                fig_imp = go.Figure(go.Bar(x=importances, y=feature_names, orientation='h', marker_color=['#1f77b4', '#ff7f0e', '#2ca02c']))
-                fig_imp.update_layout(title="AI가 중요하게 본 지표 (Feature Importance)", xaxis_title="중요도", height=250, template='plotly_dark')
-                st.plotly_chart(fig_imp, use_container_width=True)
-            else:
-                recent_df = df.tail(30)
-                fig_trend = go.Figure()
-                fig_trend.add_trace(go.Scatter(x=recent_df.index, y=recent_df['Close'], mode='lines+markers', name='종가', line=dict(color='#00b4d8')))
-                fig_trend.add_trace(go.Scatter(x=recent_df.index, y=recent_df['MA_5'], mode='lines', name='5일 이평선', line=dict(dash='dot', color='#ffb703')))
-                fig_trend.update_layout(title="최근 30일 가격 추세 및 이동평균선", yaxis_title="가격", height=250, template='plotly_dark')
-                st.plotly_chart(fig_trend, use_container_width=True)
+        fig_bt = go.Figure()
+        fig_bt.add_trace(go.Scatter(x=backtest_df.index, y=backtest_df['Buy_Hold'], mode='lines', name='단순 보유 (Buy & Hold)', line=dict(color='gray', dash='dot')))
+        fig_bt.add_trace(go.Scatter(x=backtest_df.index, y=backtest_df['AI_Strategy'], mode='lines', name='AI 시그널 트레이딩', line=dict(color='#00b4d8', width=3)))
+        
+        final_bh = backtest_df['Buy_Hold'].iloc[-1] - 100
+        final_ai = backtest_df['AI_Strategy'].iloc[-1] - 100
+        
+        fig_bt.update_layout(
+            title=f"가상 투자 수익률 비교 (단순 보유: {final_bh:+.1f}% vs AI 전략: {final_ai:+.1f}%)",
+            yaxis_title="자산 가치 (초기=100)",
+            height=350, template='plotly_dark',
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_bt, use_container_width=True)
 
         st.markdown("---")
-        st.warning("⚠️ **투자 유의사항 (Disclaimer)**: 본 하이브리드 모델은 차트와 텍스트 데이터를 기반으로 한 통계적 확률일 뿐이며, 절대적인 투자 지표가 아닙니다. 투자의 책임은 본인에게 있습니다.")
+        st.warning("⚠️ **투자 유의사항 (Disclaimer)**: 본 하이브리드 모델은 차트와 텍스트 데이터를 기반으로 한 통계적 확률일 뿐이며, 과거의 수익이 미래의 수익을 보장하지 않습니다. 투자의 책임은 본인에게 있습니다.")
