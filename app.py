@@ -57,7 +57,7 @@ def load_data(ticker):
         df = yf.download(ticker, start='2022-01-01', progress=False)
         if df.empty: return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        return df
+        return df.dropna()
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=3600) 
@@ -75,27 +75,56 @@ def fetch_and_analyze_news(keyword):
     for item in items:
         headline, link = item.title.get_text(), item.link.get_text()
         res = analyzer(headline)[0]
-        
         if res['label'] == 'positive': score, badge = res['score'], "🔥 [호재]"
         elif res['label'] == 'negative': score, badge = -res['score'], "❄️ [악재]"
         else: score, badge = 0, "➖ [중립]"
-            
         score_sum += score
         news_list.append({"title": headline, "link": link, "badge": badge})
-        
     return score_sum / len(items) if items else 0, news_list
+
+@st.cache_data(ttl=3600)
+def get_fundamentals(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        mc = info.get('marketCap')
+        pe = info.get('trailingPE')
+        pb = info.get('priceToBook')
+        div = info.get('dividendYield')
+        currency = info.get('currency', 'KRW')
+
+        if mc:
+            if mc >= 1e12: mc_str = f"{mc/1e12:.2f}조 {currency}"
+            elif mc >= 1e8: mc_str = f"{mc/1e8:.0f}억 {currency}"
+            else: mc_str = f"{mc:,} {currency}"
+        else: mc_str = "N/A"
+
+        pe_str = f"{pe:.2f}배" if pe else "N/A"
+        pb_str = f"{pb:.2f}배" if pb else "N/A"
+        div_str = f"{div*100:.2f}%" if div else "N/A"
+        
+        return {"시가총액": mc_str, "PER": pe_str, "PBR": pb_str, "배당수익률": div_str}
+    except:
+        return {"시가총액": "N/A", "PER": "N/A", "PBR": "N/A", "배당수익률": "N/A"}
 
 # --- 3. 사이드바 ---
 st.sidebar.header("🔍 빠른 종목 검색")
-search_input = st.sidebar.text_input("종목명 또는 코드 입력 (예: 카카오, AAPL)")
-if st.sidebar.button("🚀 AI 분석 시작", use_container_width=True):
-    if search_input:
-        found_ticker = get_ticker_from_name(search_input)
-        go_to_detail(found_ticker, search_input)
-        st.rerun()
+
+with st.sidebar.form(key='search_form'):
+    search_input = st.text_input("종목명 또는 코드 입력 (예: 카카오, AAPL)", help="한국 주식은 한글로, 미국 주식은 영어 티커(예: TSLA)로 검색해도 모두 찾아냅니다!")
+    submit_btn = st.form_submit_button("🚀 AI 분석 시작", use_container_width=True)
+
+if submit_btn and search_input:
+    found_ticker = get_ticker_from_name(search_input)
+    go_to_detail(found_ticker, search_input)
+    st.rerun()
 
 st.sidebar.markdown("---")
-ai_choice = st.sidebar.radio("🧠 차트 분석 모델", ("XGBoost", "인공신경망 딥러닝", "앙상블 (추천)"))
+# ✨ 전문 용어를 쉽게 풀어쓴 모델 선택 툴팁 추가 ✨
+ai_choice = st.sidebar.radio(
+    "🧠 AI 예측 알고리즘 선택", 
+    ("XGBoost", "인공신경망 딥러닝", "앙상블 (추천)"),
+    help="• XGBoost: 빠르고 정확하게 데이터를 분류하는 실전형 모델입니다.\n• 딥러닝: 사람의 뇌 구조를 모방해 복잡한 패턴을 찾아냅니다.\n• 앙상블: 여러 AI 모델의 의견을 다수결로 종합해 가장 오류가 적고 안정적인 결론을 도출합니다."
+)
 
 # ==========================================
 # 🏠 화면 A: 홈 화면
@@ -113,12 +142,22 @@ if st.session_state.page == 'HOME':
             with st.container(border=True):
                 st.markdown(f"#### {name}")
                 df_mini = load_data(tk)
-                if not df_mini.empty:
+                if not df_mini.empty and len(df_mini) >= 2:
+                    curr_p = df_mini['Close'].iloc[-1]
+                    prev_p = df_mini['Close'].iloc[-2]
+                    pct_change = ((curr_p - prev_p) / prev_p) * 100
+                    
+                    is_krw = tk.endswith('.KS') or tk.endswith('.KQ')
+                    price_str = f"{curr_p:,.0f}원" if is_krw else f"${curr_p:,.2f}"
+                    
+                    st.metric(label="현재가", value=price_str, delta=f"{pct_change:+.2f}%")
+                    
                     df_30 = df_mini.tail(30)
                     line_color = '#2ca02c' if df_30['Close'].iloc[-1] >= df_30['Close'].iloc[0] else '#d62728'
                     fig_mini = go.Figure(go.Scatter(x=df_30.index, y=df_30['Close'], line=dict(color=line_color, width=3)))
-                    fig_mini.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=100, xaxis_visible=False, yaxis_visible=False, template='plotly_dark')
+                    fig_mini.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=80, xaxis_visible=False, yaxis_visible=False, template='plotly_dark')
                     st.plotly_chart(fig_mini, use_container_width=True, config={'displayModeBar': False})
+                
                 if st.button(f"📊 {name.split(' ')[1] if ' ' in name else name} 분석하기", key=f"btn_{tk}", use_container_width=True):
                     go_to_detail(tk, name)
                     st.rerun()
@@ -137,13 +176,35 @@ elif st.session_state.page == 'DETAIL':
     st.title(f"🚀 {nm} ({tk}) 통합 AI 분석")
     df = load_data(tk)
 
-    if df.empty:
-        st.error("데이터를 불러오지 못했습니다.")
+    if df.empty or len(df) < 5:
+        st.error("데이터를 불러오지 못했거나 데이터가 너무 적습니다.")
     else:
-        with st.spinner('📰 최신 뉴스를 읽고 감성을 분석 중입니다...'):
+        curr_p = df['Close'].iloc[-1]
+        prev_p = df['Close'].iloc[-2]
+        diff = curr_p - prev_p
+        pct_change = (diff / prev_p) * 100
+        
+        is_krw = tk.endswith('.KS') or tk.endswith('.KQ')
+        price_str = f"{curr_p:,.0f} 원" if is_krw else f"$ {curr_p:,.2f}"
+        delta_str = f"{diff:+,.0f} 원 ({pct_change:+.2f}%)" if is_krw else f"{diff:+.2f} 달러 ({pct_change:+.2f}%)"
+        
+        with st.container():
+            st.metric(label="현재 주가 (최신 장마감 기준)", value=price_str, delta=delta_str)
+        
+        with st.spinner('📰 최신 뉴스와 펀더멘털 데이터를 분석 중입니다...'):
             news_score, news_data = fetch_and_analyze_news(f"{nm} 주가")
+            fundamentals = get_fundamentals(tk) 
 
-        # ✨ 내일 날짜 계산 복구
+        st.markdown("---")
+        st.markdown("### 🏢 기업 기초 체력 (Fundamentals)")
+        # 모바일 환경을 고려하여 재무 지표도 깔끔하게 툴팁 적용
+        f_cols = st.columns(4)
+        f_cols[0].metric(label="💰 시가총액", value=fundamentals['시가총액'], help="회사의 전체 가치이자 몸집의 크기를 나타냅니다.")
+        f_cols[1].metric(label="📈 PER (주가수익비율)", value=fundamentals['PER'], help="회사가 1년에 버는 돈에 비해 주가가 몇 배로 평가받는지 보여줍니다. 낮을수록 저평가되어 있을 확률이 높습니다.")
+        f_cols[2].metric(label="📊 PBR (주가순자산비율)", value=fundamentals['PBR'], help="회사가 가진 순수 재산 대비 주가 수준입니다. 1보다 낮으면 가진 재산보다도 주가가 낮다는 뜻입니다.")
+        f_cols[3].metric(label="💸 배당수익률", value=fundamentals['배당수익률'], help="지금 주식 1주를 사면 1년 동안 받을 수 있는 배당금의 비율입니다.")
+        st.markdown("---")
+
         target_date = (df.index.max() + timedelta(days=1)).strftime('%Y년 %m월 %d일')
 
         st.subheader("📊 실시간 주가 차트")
@@ -151,65 +212,60 @@ elif st.session_state.page == 'DETAIL':
         fig.update_layout(xaxis_rangeslider_visible=False, template='plotly_dark')
         st.plotly_chart(fig, use_container_width=True)
 
-        # 1. 모델 학습 데이터 준비
-        df['Tomorrow'], df['Return'], df['Vol_Change'], df['MA_5'] = df['Close'].shift(-1), df['Close'].pct_change(), df['Volume'].pct_change(), df['Close'].rolling(window=5).mean()
+        df['Tomorrow'] = df['Close'].shift(-1)
+        df['Return'] = df['Close'].pct_change()
+        df['Vol_Change'] = df['Volume'].pct_change()
+        df['MA_5'] = df['Close'].rolling(window=5).mean()
         df = df.replace([np.inf, -np.inf], np.nan).dropna()
-        X, y = df[['Return', 'Vol_Change', 'MA_5']], (df['Tomorrow'] > df['Close']).astype(int)
+        
+        X = df[['Return', 'Vol_Change', 'MA_5']]
+        y = (df['Tomorrow'] > df['Close']).astype(int)
 
         if "XGBoost" in ai_choice: model = xgb.XGBClassifier(n_estimators=100, max_depth=3, random_state=42)
         elif "딥러닝" in ai_choice: model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42)
         else: model = VotingClassifier(estimators=[('xgb', xgb.XGBClassifier(max_depth=3)), ('mlp', MLPClassifier(hidden_layer_sizes=(100, 50))), ('rf', RandomForestClassifier(n_estimators=100))], voting='soft')
 
-        # 학습 및 테스트 데이터 분리 (최근 20% 기간을 백테스팅에 사용)
         train_size = int(len(X[:-1]) * 0.8)
         X_train, y_train = X.iloc[:train_size], y.iloc[:train_size]
         X_test, y_test = X.iloc[train_size:-1], y.iloc[train_size:-1]
         
-        # 모델 학습 및 정확도 측정
         model.fit(X_train, y_train)
         accuracy = accuracy_score(y_test, model.predict(X_test)) * 100
         
-        # 백테스팅 계산 로직
         test_dates = df.index[train_size:-1]
-        ai_predictions = model.predict(X_test)
         backtest_df = pd.DataFrame(index=test_dates)
         backtest_df['Daily_Return'] = df['Return'].iloc[train_size:-1].values
         backtest_df['Buy_Hold'] = (1 + backtest_df['Daily_Return']).cumprod() * 100
-        ai_signals_shifted = np.roll(ai_predictions, shift=1)
+        ai_signals_shifted = np.roll(model.predict(X_test), shift=1)
         ai_signals_shifted[0] = 1 
-        backtest_df['AI_Strategy_Return'] = backtest_df['Daily_Return'] * ai_signals_shifted
-        backtest_df['AI_Strategy'] = (1 + backtest_df['AI_Strategy_Return']).cumprod() * 100
+        backtest_df['AI_Strategy'] = (1 + backtest_df['Daily_Return'] * ai_signals_shifted).cumprod() * 100
 
-        # 최종 예측 산출
         model.fit(X[:-1], y[:-1]) 
         base_probs = model.predict_proba(X.iloc[[-1]])[0]
         news_impact = news_score * 15.0 
         final_up_prob = min(max(base_probs[1] * 100 + news_impact, 0), 100)
         final_down_prob = 100 - final_up_prob
 
-        # --- 출력 1: 예측 시그널 및 뉴스 ---
         st.markdown("---")
-        
-        # ✨ 내일 주가 예측 직관적 결과 복구
         st.markdown(f"### 🚀 내일 ({target_date}) 최종 주가 예측")
         if final_up_prob >= 50:
             st.success(f"🔥🔥 AI는 {nm} 주가가 내일 **상승(UP)**할 것으로 예측했습니다! (확률: {final_up_prob:.1f}%)")
         else:
             st.error(f"❄️❄️ AI는 {nm} 주가가 내일 **하락(DOWN)**할 것으로 예측했습니다! (확률: {final_down_prob:.1f}%)")
         
-        st.markdown("<br>", unsafe_allow_html=True) # 약간의 여백
-        
+        st.markdown("<br>", unsafe_allow_html=True) 
         colA, colB = st.columns(2)
         
         with colA:
             st.markdown(f"#### 💡 트레이딩 시그널")
-            st.metric(label="🎯 모델 과거 테스트 정확도", value=f"{accuracy:.2f}%", help="최근 20%의 데이터를 가리고 모델이 맞춘 비율입니다.")
+            # ✨ 정확도 설명에 친절한 툴팁 추가 ✨
+            st.metric(label="🎯 모델 과거 테스트 정확도", value=f"{accuracy:.2f}%", help="최근 20%의 기간 동안 AI가 정답(실제 상승/하락)을 맞춘 비율입니다.")
             if final_up_prob >= 70: st.success(f"📈 **[적극 매수]** 강력한 상승 신호")
             elif final_up_prob >= 55: st.info(f"🔼 **[매수 / 분할]** 완만한 상승 신호")
             elif final_down_prob >= 70: st.error(f"📉 **[적극 매도]** 강력한 하락 신호")
             elif final_down_prob >= 55: st.warning(f"🔽 **[매도 / 비중 축소]** 완만한 하락 신호")
             else: st.write(f"⏸️ **[관망 (Hold)]** 뚜렷한 추세 없음")
-            st.caption(f"*(차트 확률 {base_probs[1]*100:.1f}% + 뉴스 보정치 {news_impact:+.1f}%p)*")
+            st.caption(f"*(차트 확률 {base_probs[1]*100:.1f}% + 최신 뉴스 분석 보정치 {news_impact:+.1f}%p 결합)*")
 
         with colB:
             st.markdown("#### 📰 실시간 뉴스 감성 분석")
@@ -221,10 +277,10 @@ elif st.session_state.page == 'DETAIL':
             else:
                 st.write("최신 뉴스 데이터를 찾을 수 없습니다.")
 
-        # --- 출력 2: 백테스팅 시각화 파트 ---
         st.markdown("---")
+        # ✨ 백테스팅 설명 보강 ✨
         st.markdown("### 📈 모델 신뢰도 검증 (Backtesting Simulation)")
-        st.info("💡 **가상 투자 테스트:** 최근 기간 동안 주식을 계속 보유했을 때(회색 선)와, AI의 매수/매도 시그널을 따랐을 때(파란색 선)의 자산 변화 차이입니다. (초기 자산 100 기준)")
+        st.info("💡 **가상 투자 테스트란?** 과거 특정 시점에 100만 원을 투자했다고 가정했을 때, 주식을 그냥 들고 있던 사람(회색 선)과 AI의 매수/매도 지시를 매일 따른 사람(파란색 선)의 최종 자산 차이를 보여주는 검증 그래프입니다.")
         
         fig_bt = go.Figure()
         fig_bt.add_trace(go.Scatter(x=backtest_df.index, y=backtest_df['Buy_Hold'], mode='lines', name='단순 보유 (Buy & Hold)', line=dict(color='gray', dash='dot')))
@@ -237,7 +293,8 @@ elif st.session_state.page == 'DETAIL':
             title=f"가상 투자 수익률 비교 (단순 보유: {final_bh:+.1f}% vs AI 전략: {final_ai:+.1f}%)",
             yaxis_title="자산 가치 (초기=100)",
             height=350, template='plotly_dark',
-            hovermode="x unified"
+            hovermode="x unified",
+            margin=dict(l=20, r=20, t=40, b=20) # 스마트폰에서 그래프가 잘리지 않도록 마진 조정
         )
         st.plotly_chart(fig_bt, use_container_width=True)
 
