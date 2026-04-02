@@ -12,6 +12,7 @@ import FinanceDataReader as fdr
 from datetime import timedelta
 from bs4 import BeautifulSoup
 from transformers import pipeline
+import google.generativeai as genai # ✨ 생성형 AI 라이브러리 추가!
 
 # --- 1. 웹사이트 기본 설정 ---
 st.set_page_config(page_title="AI 주식 분석 대시보드", layout="wide", initial_sidebar_state="expanded")
@@ -27,6 +28,14 @@ def go_to_detail(ticker, name):
 
 def go_home():
     st.session_state.page = 'HOME'
+
+# --- ✨ 생성형 AI(Gemini) 세팅 ✨ ---
+try:
+    # Streamlit 클라우드 보안 설정(Secrets)에서 API 키를 가져옵니다.
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    llm_ready = True
+except:
+    llm_ready = False
 
 # --- 2. AI 모델 및 데이터 로드 함수 ---
 @st.cache_resource 
@@ -119,7 +128,6 @@ if submit_btn and search_input:
     st.rerun()
 
 st.sidebar.markdown("---")
-# ✨ 전문 용어를 쉽게 풀어쓴 모델 선택 툴팁 추가 ✨
 ai_choice = st.sidebar.radio(
     "🧠 AI 예측 알고리즘 선택", 
     ("XGBoost", "인공신경망 딥러닝", "앙상블 (추천)"),
@@ -197,7 +205,6 @@ elif st.session_state.page == 'DETAIL':
 
         st.markdown("---")
         st.markdown("### 🏢 기업 기초 체력 (Fundamentals)")
-        # 모바일 환경을 고려하여 재무 지표도 깔끔하게 툴팁 적용
         f_cols = st.columns(4)
         f_cols[0].metric(label="💰 시가총액", value=fundamentals['시가총액'], help="회사의 전체 가치이자 몸집의 크기를 나타냅니다.")
         f_cols[1].metric(label="📈 PER (주가수익비율)", value=fundamentals['PER'], help="회사가 1년에 버는 돈에 비해 주가가 몇 배로 평가받는지 보여줍니다. 낮을수록 저평가되어 있을 확률이 높습니다.")
@@ -246,19 +253,47 @@ elif st.session_state.page == 'DETAIL':
         final_up_prob = min(max(base_probs[1] * 100 + news_impact, 0), 100)
         final_down_prob = 100 - final_up_prob
 
+        # --- ✨ 생성형 AI 리포트 출력 파트 ✨ ---
         st.markdown("---")
         st.markdown(f"### 🚀 내일 ({target_date}) 최종 주가 예측")
         if final_up_prob >= 50:
-            st.success(f"🔥🔥 AI는 {nm} 주가가 내일 **상승(UP)**할 것으로 예측했습니다! (확률: {final_up_prob:.1f}%)")
+            st.success(f"🔥🔥 예측 모델은 {nm} 주가가 내일 **상승(UP)**할 것으로 판단했습니다! (확률: {final_up_prob:.1f}%)")
         else:
-            st.error(f"❄️❄️ AI는 {nm} 주가가 내일 **하락(DOWN)**할 것으로 예측했습니다! (확률: {final_down_prob:.1f}%)")
+            st.error(f"❄️❄️ 예측 모델은 {nm} 주가가 내일 **하락(DOWN)**할 것으로 판단했습니다! (확률: {final_down_prob:.1f}%)")
+            
+        if llm_ready:
+            with st.spinner('🤖 생성형 AI가 오늘 수집된 퀀트 데이터를 종합하여 리포트를 작성하고 있습니다...'):
+                try:
+                    sentiment_text = "호재 우세" if news_score > 0.2 else "악재 우세" if news_score < -0.2 else "중립/사실 위주"
+                    news_titles = ", ".join([item['title'] for item in news_data]) if news_data else "관련 뉴스 없음"
+                    
+                    prompt = f"""
+                    당신은 여의도의 탑 티어 퀀트 애널리스트입니다. 아래 데이터를 바탕으로 {nm}({tk})에 대한 3줄 요약 브리핑을 작성해주세요.
+                    - 시가총액: {fundamentals['시가총액']}
+                    - PER (주가수익비율): {fundamentals['PER']}
+                    - 퀀트 예측 모델의 내일 상승 확률: {final_up_prob:.1f}%
+                    - 오늘의 주요 뉴스 헤드라인: {news_titles}
+                    - 현재 시장 분위기: {sentiment_text}
+
+                    조건:
+                    1. 개인 투자자가 폰으로 읽기 쉽게 친절한 말투로 작성할 것.
+                    2. 명확하게 3줄로 요약할 것 (각 줄은 불릿 포인트 형태 사용).
+                    3. 마지막 줄에는 반드시 투자 권유가 아닌 참고용 브리핑이라는 면책 조항을 부드럽게 포함할 것.
+                    """
+                    model_gen = genai.GenerativeModel('gemini-1.5-flash')
+                    response = model_gen.generate_content(prompt)
+                    
+                    st.info(response.text)
+                except Exception as e:
+                    st.warning("⚠️ 트래픽 과부하로 LLM 브리핑을 생성할 수 없습니다. 잠시 후 다시 시도해주세요.")
+        else:
+            st.warning("🔑 LLM 애널리스트 리포트 기능을 활성화하려면 Streamlit Secrets에 API Key 설정이 필요합니다.")
         
         st.markdown("<br>", unsafe_allow_html=True) 
         colA, colB = st.columns(2)
         
         with colA:
             st.markdown(f"#### 💡 트레이딩 시그널")
-            # ✨ 정확도 설명에 친절한 툴팁 추가 ✨
             st.metric(label="🎯 모델 과거 테스트 정확도", value=f"{accuracy:.2f}%", help="최근 20%의 기간 동안 AI가 정답(실제 상승/하락)을 맞춘 비율입니다.")
             if final_up_prob >= 70: st.success(f"📈 **[적극 매수]** 강력한 상승 신호")
             elif final_up_prob >= 55: st.info(f"🔼 **[매수 / 분할]** 완만한 상승 신호")
@@ -278,7 +313,6 @@ elif st.session_state.page == 'DETAIL':
                 st.write("최신 뉴스 데이터를 찾을 수 없습니다.")
 
         st.markdown("---")
-        # ✨ 백테스팅 설명 보강 ✨
         st.markdown("### 📈 모델 신뢰도 검증 (Backtesting Simulation)")
         st.info("💡 **가상 투자 테스트란?** 과거 특정 시점에 100만 원을 투자했다고 가정했을 때, 주식을 그냥 들고 있던 사람(회색 선)과 AI의 매수/매도 지시를 매일 따른 사람(파란색 선)의 최종 자산 차이를 보여주는 검증 그래프입니다.")
         
@@ -294,7 +328,7 @@ elif st.session_state.page == 'DETAIL':
             yaxis_title="자산 가치 (초기=100)",
             height=350, template='plotly_dark',
             hovermode="x unified",
-            margin=dict(l=20, r=20, t=40, b=20) # 스마트폰에서 그래프가 잘리지 않도록 마진 조정
+            margin=dict(l=20, r=20, t=40, b=20) 
         )
         st.plotly_chart(fig_bt, use_container_width=True)
 
