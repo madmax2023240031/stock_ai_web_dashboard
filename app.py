@@ -12,7 +12,7 @@ import FinanceDataReader as fdr
 from datetime import timedelta
 from bs4 import BeautifulSoup
 from transformers import pipeline
-import google.generativeai as genai # ✨ 생성형 AI 라이브러리 추가!
+import google.generativeai as genai # ✨ 구글 생성형 AI 라이브러리
 
 # --- 1. 웹사이트 기본 설정 ---
 st.set_page_config(page_title="AI 주식 분석 대시보드", layout="wide", initial_sidebar_state="expanded")
@@ -31,7 +31,6 @@ def go_home():
 
 # --- ✨ 생성형 AI(Gemini) 세팅 ✨ ---
 try:
-    # Streamlit 클라우드 보안 설정(Secrets)에서 API 키를 가져옵니다.
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     llm_ready = True
 except:
@@ -207,8 +206,8 @@ elif st.session_state.page == 'DETAIL':
         st.markdown("### 🏢 기업 기초 체력 (Fundamentals)")
         f_cols = st.columns(4)
         f_cols[0].metric(label="💰 시가총액", value=fundamentals['시가총액'], help="회사의 전체 가치이자 몸집의 크기를 나타냅니다.")
-        f_cols[1].metric(label="📈 PER (주가수익비율)", value=fundamentals['PER'], help="회사가 1년에 버는 돈에 비해 주가가 몇 배로 평가받는지 보여줍니다. 낮을수록 저평가되어 있을 확률이 높습니다.")
-        f_cols[2].metric(label="📊 PBR (주가순자산비율)", value=fundamentals['PBR'], help="회사가 가진 순수 재산 대비 주가 수준입니다. 1보다 낮으면 가진 재산보다도 주가가 낮다는 뜻입니다.")
+        f_cols[1].metric(label="📈 PER (주가수익비율)", value=fundamentals['PER'], help="회사가 1년에 버는 돈에 비해 주가가 몇 배로 평가받는지 보여줍니다.")
+        f_cols[2].metric(label="📊 PBR (주가순자산비율)", value=fundamentals['PBR'], help="회사가 가진 순수 재산 대비 주가 수준입니다.")
         f_cols[3].metric(label="💸 배당수익률", value=fundamentals['배당수익률'], help="지금 주식 1주를 사면 1년 동안 받을 수 있는 배당금의 비율입니다.")
         st.markdown("---")
 
@@ -280,12 +279,12 @@ elif st.session_state.page == 'DETAIL':
                     2. 명확하게 3줄로 요약할 것 (각 줄은 불릿 포인트 형태 사용).
                     3. 마지막 줄에는 반드시 투자 권유가 아닌 참고용 브리핑이라는 면책 조항을 부드럽게 포함할 것.
                     """
-                    model_gen = genai.GenerativeModel('gemini-1.5-flash')
+                    model_gen = genai.GenerativeModel('gemini-2.5-flash')
                     response = model_gen.generate_content(prompt)
                     
                     st.info(response.text)
                 except Exception as e:
-                    st.warning("⚠️ 트래픽 과부하로 LLM 브리핑을 생성할 수 없습니다. 잠시 후 다시 시도해주세요.")
+                    st.warning(f"⚠️ 에러의 진짜 원인: {e}")
         else:
             st.warning("🔑 LLM 애널리스트 리포트 기능을 활성화하려면 Streamlit Secrets에 API Key 설정이 필요합니다.")
         
