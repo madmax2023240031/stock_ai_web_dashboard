@@ -121,10 +121,28 @@ elif st.session_state.page == 'DETAIL':
         st.markdown("---")
         st.markdown("### 🏢 기업 기초 체력 (Fundamentals)")
         f_cols = st.columns(4)
-        f_cols[0].metric(label="💰 시가총액", value=fundamentals['시가총액'])
-        f_cols[1].metric(label="📈 PER", value=fundamentals['PER'])
-        f_cols[2].metric(label="📊 PBR", value=fundamentals['PBR'])
-        f_cols[3].metric(label="💸 배당수익률", value=fundamentals['배당수익률'])
+        
+        # ✨ 툴팁(?) 추가 완료!
+        f_cols[0].metric(
+            label="💰 시가총액", 
+            value=fundamentals['시가총액'], 
+            help="기업의 총 가치를 의미합니다. (현재 주가 × 총 발행 주식 수)"
+        )
+        f_cols[1].metric(
+            label="📈 PER", 
+            value=fundamentals['PER'], 
+            help="주가수익비율(Price Earnings Ratio). 회사가 1년 동안 벌어들인 순이익 대비 주가가 몇 배인지 나타냅니다. 보통 이 수치가 낮을수록 주가가 저평가된 것으로 봅니다."
+        )
+        f_cols[2].metric(
+            label="📊 PBR", 
+            value=fundamentals['PBR'], 
+            help="주가순자산비율(Price Book-value Ratio). 회사가 가진 순자산(장부상 가치) 대비 주가가 몇 배인지 나타냅니다. 1배 미만이면 회사를 다 팔아도 남는 돈보다 주가가 싸다는 의미로 저평가 신호 중 하나입니다."
+        )
+        f_cols[3].metric(
+            label="💸 배당수익률", 
+            value=fundamentals['배당수익률'], 
+            help="현재 주가 대비 1년간 받을 수 있는 배당금의 비율입니다."
+        )
         st.markdown("---")
 
         target_date = (df.index.max() + timedelta(days=1)).strftime('%Y년 %m월 %d일')
