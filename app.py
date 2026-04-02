@@ -1,8 +1,22 @@
+import os
+import warnings
+import logging
+
+# ✨ 1. 맥북(Apple Silicon) CPU 충돌 방지 및 수다쟁이 경고(Warning) 완벽 차단!
+os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error" 
+
+# TODO(기술 부채): 조만간 google.generativeai 패키지 지원이 종료되고 google.genai로 변경될 예정임. 
+# 현재는 포트폴리오 시연을 위해 경고를 숨김 처리(ignore)해 두었으며, 추후 v3.0 업데이트 시 마이그레이션 할 것!
+warnings.filterwarnings("ignore") 
+logging.getLogger("transformers").setLevel(logging.ERROR) 
+
 import streamlit as st
 import plotly.graph_objects as go
 from datetime import timedelta
 
-# ✨ 우리가 분리한 모듈(직원들)에서 기능 불러오기
+# ✨ 분리한 모듈(직원들)에서 기능 불러오기
 from data_loader import get_ticker_from_name, load_data, fetch_and_analyze_news, get_fundamentals
 from model_engine import run_ml_models, generate_llm_report
 
@@ -24,7 +38,7 @@ def go_home():
 st.sidebar.header("🔍 빠른 종목 검색")
 with st.sidebar.form(key='search_form'):
     search_input = st.text_input("종목명 또는 코드 입력 (예: 카카오, AAPL)", help="한국/미국 주식 모두 지원합니다!")
-    submit_btn = st.form_submit_button("🚀 AI 분석 시작", use_container_width=True)
+    submit_btn = st.form_submit_button("🚀 AI 분석 시작", width='stretch')
 
 if submit_btn and search_input:
     found_ticker = get_ticker_from_name(search_input)
@@ -40,7 +54,14 @@ if st.session_state.page == 'HOME':
     st.write("관심 종목을 클릭해 **차트(정형) + 뉴스(비정형) 하이브리드 AI 분석**을 받아보세요.")
     st.markdown("---")
 
-    home_stocks = {"🇺🇸 엔비디아": "NVDA", "🇺🇸 애플": "AAPL", "🇺🇸 테슬라": "TSLA", "🇰🇷 삼성전자": "005930.KS", "🇰🇷 현대차": "005380.KS", "🪙 비트코인": "BTC-USD"}
+    # ✨ 종목 리스트 12개로 확장 (미국/한국 핵심 종목 믹스)
+    home_stocks = {
+        "🇺🇸 엔비디아": "NVDA", "🇺🇸 애플": "AAPL", "🇺🇸 테슬라": "TSLA", 
+        "🇺🇸 마이크로소프트": "MSFT", "🇺🇸 아마존": "AMZN", "🇺🇸 구글": "GOOGL",
+        "🇰🇷 삼성전자": "005930.KS", "🇰🇷 SK하이닉스": "000660.KS", "🇰🇷 현대차": "005380.KS", 
+        "🇰🇷 NAVER": "035420.KS", "🇰🇷 카카오": "035720.KS", "🪙 비트코인": "BTC-USD"
+    }
+
     cols = st.columns(3)
     
     for i, (name, tk) in enumerate(home_stocks.items()):
@@ -61,9 +82,11 @@ if st.session_state.page == 'HOME':
                     line_color = '#2ca02c' if df_30['Close'].iloc[-1] >= df_30['Close'].iloc[0] else '#d62728'
                     fig_mini = go.Figure(go.Scatter(x=df_30.index, y=df_30['Close'], line=dict(color=line_color, width=3)))
                     fig_mini.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=80, xaxis_visible=False, yaxis_visible=False, template='plotly_dark')
-                    st.plotly_chart(fig_mini, use_container_width=True, config={'displayModeBar': False})
+                    st.plotly_chart(fig_mini, config={'displayModeBar': False}, width='stretch')
                 
-                if st.button(f"📊 {name.split(' ')[1] if ' ' in name else name} 분석하기", key=f"btn_{tk}", use_container_width=True):
+                # 버튼 이름 깔끔하게 처리
+                display_name = name.split(' ')[1] if ' ' in name else name
+                if st.button(f"📊 {display_name} 분석", key=f"btn_{tk}", width='stretch'):
                     go_to_detail(tk, name)
                     st.rerun()
 
@@ -108,9 +131,9 @@ elif st.session_state.page == 'DETAIL':
         st.subheader("📊 실시간 주가 차트")
         fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
         fig.update_layout(xaxis_rangeslider_visible=False, template='plotly_dark')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
-        # ✨ 예측 모델 기능 호출 (단 1줄로 끝남!)
+        # ✨ 예측 모델 기능 호출
         accuracy, final_up_prob, final_down_prob, backtest_df, base_probs, news_impact = run_ml_models(df, ai_choice, news_score)
 
         st.markdown("---")
@@ -119,7 +142,7 @@ elif st.session_state.page == 'DETAIL':
         else: st.error(f"❄️❄️ 예측 모델은 {nm} 주가가 내일 **하락(DOWN)**할 것으로 판단했습니다! (확률: {final_down_prob:.1f}%)")
             
         with st.spinner('🤖 생성형 AI가 오늘 수집된 퀀트 데이터를 종합하여 리포트를 작성하고 있습니다...'):
-            # ✨ LLM 리포트 기능 호출 (단 3줄로 끝남!)
+            # ✨ LLM 리포트 기능 호출
             llm_status, llm_msg = generate_llm_report(nm, tk, fundamentals, final_up_prob, news_data, news_score)
             if llm_status == "success": st.info(llm_msg)
             elif llm_status == "error_no_key": st.warning("🔑 LLM 애널리스트 리포트 기능을 활성화하려면 Streamlit Secrets에 API Key 설정이 필요합니다.")
@@ -157,6 +180,6 @@ elif st.session_state.page == 'DETAIL':
         final_ai = backtest_df['AI_Strategy'].iloc[-1] - 100
         
         fig_bt.update_layout(title=f"가상 투자 수익률 비교 (단순 보유: {final_bh:+.1f}% vs AI 전략: {final_ai:+.1f}%)", yaxis_title="자산 가치 (초기=100)", height=350, template='plotly_dark', hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20))
-        st.plotly_chart(fig_bt, use_container_width=True)
+        st.plotly_chart(fig_bt, width='stretch')
         st.markdown("---")
         st.warning("⚠️ **투자 유의사항**: 투자의 책임은 본인에게 있습니다.")
